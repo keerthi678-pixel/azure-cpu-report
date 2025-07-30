@@ -1,0 +1,43 @@
+#!/bin/bash
+
+# === Configuration ===
+output="$HOME/clouddrive/vm_cpu_stats_report.csv"
+start_date="2025-06-01T00:00:00Z"
+end_date="2025-06-30T23:59:59Z"
+aggregation="PT1H"
+
+# === Header ===
+echo "VM Name,Resource Group,Date,Average CPU,Minimum CPU,Maximum CPU,Total CPU" > "$output"
+
+# === Get subscription ID ===
+subscription_id=$(az account show --query id -o tsv)
+
+# === Process each VM ===
+az vm list --query "[].{name:name, resourceGroup:resourceGroup}" -o tsv | while read vmname rg; do
+    echo "Processing $vmname in $rg..."
+
+    cpu_data=$(az monitor metrics list \
+        --resource "/subscriptions/$subscription_id/resourceGroups/$rg/providers/Microsoft.Compute/virtualMachines/$vmname" \
+        --metric "Percentage CPU" \
+        --interval $aggregation \
+        --start-time $start_date \
+        --end-time $end_date \
+        --aggregation Average Minimum Maximum Total \
+        --output json)
+
+    timestamps=$(echo "$cpu_data" | jq -r '.value[0].timeseries[0].data[].timeStamp')
+    avg_values=$(echo "$cpu_data" | jq -r '.value[0].timeseries[0].data[].average')
+    min_values=$(echo "$cpu_data" | jq -r '.value[0].timeseries[0].data[].minimum')
+    max_values=$(echo "$cpu_data" | jq -r '.value[0].timeseries[0].data[].maximum')
+    total_values=$(echo "$cpu_data" | jq -r '.value[0].timeseries[0].data[].total')
+
+    # Combine and write
+    paste <(echo "$timestamps") <(echo "$avg_values") <(echo "$min_values") <(echo "$max_values") <(echo "$total_values") | while read ts avg min max total; do
+        # Skip entries with all 0 or null
+        if [[ "$avg" != "null" && "$avg" != "0.0" ]]; then
+            echo "$vmname,$rg,$ts,$avg,$min,$max,$total" >> "$output"
+        fi
+    done
+done
+
+echo " Report generated at: $output"
